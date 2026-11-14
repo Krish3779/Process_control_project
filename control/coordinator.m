@@ -1,27 +1,17 @@
 function [q, info] = coordinator(s, scn, cfg, solver, opts)
 % COORDINATOR  Steps 2-11 of the logic-based distributed MPC (Frejo & Camacho 2020).
-%
-%   [q, info] = coordinator(s, scn, cfg, solver)
-%   [q, info] = coordinator(s, scn, cfg, solver, opts)
-%
-% The coordinator does not know whether the local MPC is fmincon or a neural network.
-% It only calls the function handle "solver":
-%
+
 %   [q, qseq] = solver(ls, dni_prev, q_prev, Tin, Tout, Ta, qmax_eff, cfg)
-%
 %     q    : first-step flow of this loop [l/s]
-%     qseq : planned flow sequence [1 x Nu]. A scalar is also accepted (e.g. a network
-%            that only predicts the first move); the saturation test and the cost
-%            perturbation then use the first move only (held over the horizon).
-%
+%     qseq : planned flow sequence [1 x Nu]. A scalar is also accepted (e.g. a network that only predicts the first move); the saturation test and the cost perturbation then use the first move only (held over the horizon).
+
 % Optional opts fields (defaults in brackets):
 %   lambda  [0.01]  flow increment for Steps 7-10 [l/s]
-%   qhi     [min(cfg.qmax, 1.2)]  largest flow a loop may be raised to [l/s]
-%           (the 3 s / 6 m control model is unstable above ~1.25 l/s)
+%   qhi     [min(cfg.qmax, 1.2)]  largest flow a loop may be raised to [l/s] (the 3 s/6 m control model is unstable above ~1.25 l/s)
 %   gmin    [1e-4]  smallest marginal cost improvement still worth acting on [cost per l/s]
 %   tolq    [1e-3]  tolerance for "saturated" and "total flow at maximum" [l/s]
 %   maxIter [500]   safety limit on Steps 6-10 iterations
-%
+
 % Output q is [Nl x 1] in l/s. info holds the timing split and diagnostics.
 
     if nargin < 5 || isempty(opts), opts = struct(); end
@@ -33,13 +23,14 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
 
     Nl  = cfg.Nl;
     qT  = cfg.qTmax;
-    cap = qT / Nl;
+    cap = qT  / Nl;
     t_all = tic;
 
-    % ---- Step 1: data for every loop (true future DNI = perfect preview) ----
-    Dp  = get_dni_preview(scn, s.t, cfg);       % [Nl x 29 x Np]
+    % Step 1: data for every loop (true future DNI = perfect preview) 
+    
+    Dp  = get_dni_preview(scn, s.t, cfg);       % [Nl x 29 x  Np]
     ls  = cell(Nl, 1);
-    dni = cell(Nl, 1);
+    dni  = cell(Nl, 1);
     for j = 1:Nl
         ls{j}  = coarsen_state(s, j, cfg);
         dni{j} = squeeze(Dp(j, :, :));          % [29 x Np]
@@ -49,13 +40,15 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
     info.time.step4 = 0;
     info.iters      = 0;
 
-    % ---- Step 2: local MPC per loop, no global constraint ----
+    %  Step 2: local MPC per loop, no global constraint
+    
     t2 = tic;
     [q2, ~] = solve_all(solver, ls, dni, s, cfg, cfg.qmax);
-    info.time.step2 = toc(t2);
+    info.time.step2  = toc(t2);
     info.q_step2    = q2;
 
-    % ---- Step 3: feasibility ----
+    % Step 3: feasibility
+    
     if sum(q2) <= qT + 1e-9
         q = q2;
         info.exit = 'step3_feasible';
@@ -63,13 +56,15 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
         return
     end
 
-    % ---- Step 4: re-solve with cap qT/Nl (feasible, not necessarily optimal) ----
+    % Step 4: re-solve with cap qT/Nl (feasible, not necessarily optimal)
+    
     t4 = tic;
-    [q4, S4] = solve_all(solver, ls, dni, s, cfg, cap);
+    [q4, S4]  =  solve_all(solver, ls, dni, s, cfg, cap);
     info.time.step4 = toc(t4);
     info.q_step4    = q4;
 
-    % ---- Step 5: optimality check (saturated at the cap anywhere in the horizon) ----
+    % Step 5: optimality check (saturated at the cap anywhere in the horizon)
+    
     sat = false(Nl, 1);
     for j = 1:Nl
         sat(j) = any(S4{j} >= cap - tolq);
@@ -82,7 +77,8 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
         return
     end
 
-    % ---- Steps 6-10: improve optimality while keeping sum(q) <= qT ----
+    % Steps 6-10: improve optimality while keeping sum(q) <= qT 
+    
     cur = q4;                                   % current first-step flows
     J   = @(j, x) loop_cost(j, x, S4, ls, dni, s, cfg);   % cost of loop j if first move = x
     Jc   = nan(Nl, 1);  gain = nan(Nl, 1);  loss = nan(Nl, 1);   % NaN = needs refresh
@@ -94,7 +90,7 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
 
         % Step 6: is there spare total flow?
         if qT - sum(cur) > tolq
-            [gbest, ji] = max(gain);
+            [gbest, ji]   =   max(gain);
             if gbest > gmin                       % Step 7: raising some loop helps
                 % Step 8: raise the best loop while it stays best / margin / gain remain
                 others = gain;  others(ji) = -Inf;
@@ -136,7 +132,7 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
         Jc([ji jd]) = NaN;  gain([ji jd]) = NaN;  loss([ji jd]) = NaN;
     end
 
-    % ---- Step 11: apply ----
+    % Step 11: apply
     q = min(max(cur, cfg.qmin), cfg.qmax);
     if sum(q) > qT + 1e-6
         warning('coordinator:TotalFlow', 'Total flow %.4f exceeds qTmax %.4f', sum(q), qT);
@@ -145,11 +141,11 @@ function [q, info] = coordinator(s, scn, cfg, solver, opts)
 end
 
 
-% =====================================================================
+
 function [q, S] = solve_all(solver, ls, dni, s, cfg, cap_eff)
 % Call the local solver for every loop with flow cap cap_eff.
-    Nl = numel(ls);
-    q  = zeros(Nl, 1);
+    Nl  = numel(ls);
+    q  =  zeros(Nl, 1);
     S  = cell(Nl, 1);
     for j = 1:Nl
         args = {ls{j}, dni{j}, s.q_prev(j), s.Tin, s.Tout, cfg.Ta, cap_eff, cfg};
@@ -175,7 +171,7 @@ end
 function J = loop_cost(j, first, S, ls, dni, s, cfg)
 % Local cost of loop j when its first planned flow is replaced by "first".
     seq    = S{j};
-    seq(1) = first;
+    seq(1)  =  first;
     J = cost_local(seq, ls{j}, dni{j}, s.q_prev(j), s.Tin, s.Tout, cfg.Ta, cfg);
     if ~isfinite(J), J = Inf; end
 end
@@ -188,7 +184,7 @@ function [Jc, gain, loss] = refresh_cache(Jc, gain, loss, cur, sat, J, qmin, lam
 % Both are per l/s, with d = lambda clipped at the flow limits, so they are comparable
 % even when a loop is close to qmin or qhi.
     for j = 1:numel(cur)
-        if isnan(Jc(j)), Jc(j) = J(j, cur(j)); end
+        if isnan(Jc(j)), Jc(j)   =   J(j, cur(j)); end
         if isnan(gain(j))
             up = min(cur(j) + lambda, qhi);
             if sat(j) && (up - cur(j)) > 1e-9
@@ -201,7 +197,7 @@ function [Jc, gain, loss] = refresh_cache(Jc, gain, loss, cur, sat, J, qmin, lam
         if isnan(loss(j))
             dn = max(cur(j) - lambda, qmin);
             if (cur(j) - dn) > 1e-9
-                loss(j) = (J(j, dn) - Jc(j)) / (cur(j) - dn);
+                loss(j) = (J(j, dn) - Jc(j)) / (cur(j) - dn);   
             else
                 loss(j) = Inf;
             end
@@ -212,11 +208,10 @@ end
 
 
 function info = finish_info(info, t_all)
-    info.time.total = toc(t_all);
+    info.time.total =  toc(t_all);
     info.time.local = info.time.step2 + info.time.step4;
     info.time.coord = info.time.total - info.time.local;
 end
-
 
 function v = getopt(opts, name, default)
     if isfield(opts, name), v = opts.(name); else, v = default; end
