@@ -8,13 +8,13 @@ function [q, qseq] = local_mpc_fmincon(ls, dni_prev, q_prev, Tin, Tout, Ta, qmax
 
     rs = RandStream('mt19937ar', 'Seed', 1);        % fixed seed, global rng untouched
     q0 = min(max(q_prev, cfg.qmin), qmax_eff);
-    x0 = { q0*ones(Nu,1), lb, ub, lb + rand(rs, Nu, 1).*(ub - lb) };
+    x0 = { q0*ones(Nu,1), lb, ub, lb + rand(rs, Nu, 1).   * (ub - lb) };
 
     opts = optimoptions('fmincon', 'Algorithm', 'sqp', 'Display', 'off');
     f    = @(u) cost_local(u(:).', ls, dni_prev, q_prev, Tin, Tout, Ta, cfg);
 
     best  = inf;  ubest = x0{1};
-    for i = 1:4
+    for i  = 1:4
         if ~isfinite(f(x0{i})), continue; end       % skip a bad starting point
         [u, fv] = fmincon(f, x0{i}, [], [], [], [], lb, ub, [], opts);
         if fv < best, best = fv; ubest = u; end
